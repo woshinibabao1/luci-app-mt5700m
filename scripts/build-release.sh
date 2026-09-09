@@ -4,21 +4,21 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="${RUNNER_TEMP:-/tmp}/mt5700m-sdk"
 output_dir="${repo_dir}/dist-release"
-base_url="https://downloads.immortalwrt.org/releases/23.05.4/targets/mediatek/filogic"
+base_url="https://downloads.immortalwrt.org/snapshots/targets/mediatek/filogic"
 qmodem_commit="6f84b7935921cce6a215171af5e93cad62f8a5a5"
 
 mkdir -p "${work_dir}" "${output_dir}"
 find "${output_dir}" -mindepth 1 -maxdepth 1 -delete
 cd "${work_dir}"
 curl -fsSLO "${base_url}/sha256sums"
-# ImmortalWrt 23.05 使用 .tar.xz 格式的 SDK
-archive="$(awk '/immortalwrt-sdk-.*Linux-x86_64\.tar\.xz$/ { print $2; exit }' sha256sums | sed 's/^\*//')"
+# ImmortalWrt 24.10-SNAPSHOT SDK 文件名: immortalwrt-sdk-mediatek-filogic_gcc-*.tar.zst
+archive="$(awk '/immortalwrt-sdk-mediatek-filogic_.*Linux-x86_64\.tar\.zst$/ { print $2; exit }' sha256sums | sed 's/^\*//')"
 test -n "${archive}"
 curl -fL --retry 5 "${base_url}/${archive}" -o "${archive}"
 grep "[ *]${archive}$" sha256sums | sha256sum -c -
-tar -Jxf "${archive}"
-# ImmortalWrt 的 SDK 解压后目录名以 immortalwrt-sdk- 开头
-sdk_dir="$(find "${work_dir}" -maxdepth 1 -type d -name 'immortalwrt-sdk-*' | head -n 1)"
+tar --zstd -xf "${archive}"
+# 解压后目录名: immortalwrt-sdk-mediatek-filogic_gcc-*_Linux-x86_64
+sdk_dir="$(find "${work_dir}" -maxdepth 1 -type d -name 'immortalwrt-sdk-mediatek-filogic_*' | head -n 1)"
 test -n "${sdk_dir}"
 
 cd "${sdk_dir}"
@@ -97,7 +97,7 @@ make package/h5000m-custom/luci-app-mt5700m/clean >/dev/null 2>&1 || true
 rm -rf build_dir/target-*/luci-app-mt5700m \
        staging_dir/target-*/root-*/www/luci-static/resources/view/mt5700m \
        staging_dir/target-*/root-*/www/5700 \
-       bin/packages/*/custom/luci-app-mt5700m*.apk bin/packages/*/custom/luci-app-mt5700m_*.ipk 2>/dev/null || true
+       bin/packages/*/custom/luci-app-mt5700m_*.ipk bin/packages/*/custom/luci-app-mt5700m*.apk 2>/dev/null || true
 # CRLF prevention: .gitattributes mandates eol=lf for www/5700 text files.
 # A pre-compile `sed -i 's/\r$//'` was empirically proven to corrupt large
 # single-line JS bundles on CI runners, so it stays removed.  The post-compile
@@ -112,13 +112,10 @@ make package/h5000m-custom/luci-app-mt5700m/compile -j"$(nproc)" V=s
 #
 # This is the step that fixes SDK truncation of huge minified JS bundles
 # (34000+ char lines; the SDK copy/tar mangles CRLF/long-line files).
-# The .ipk is assembled FROM staging_dir, so overwriting staging_dir here
-# DOES reach the package.
 cp -a "${repo_dir}/mt5700webui-openwrt-server/at-webserver/files/www/5700/." staging_dir/target-*/root-*/www/5700/.
 echo "INFO: re-copied pristine www/5700 (mt5700webui 4.0) into staging_dir after compile"
 
 # Sanity check: the freshly staged www tree must contain the WebUI integration.
-# If this fails, the SDK reused a cached htdocs copy and the package would be broken.
 if ! grep -rq "mt5700m-webui-cta" staging_dir/target-*/root-*/www/luci-static/resources/view/mt5700m/ 2>/dev/null; then
   echo "ERROR: built www tree is missing the WebUI entry button (SDK caching?)" >&2
   exit 1
@@ -127,7 +124,7 @@ if ! ls staging_dir/target-*/root-*/www/5700/index.html >/dev/null 2>&1; then
   echo "ERROR: built www tree is missing the WebUI SPA at /www/5700/index.html" >&2
   exit 1
 fi
-# Guard rail: catch truncated/garbled JS bundles (e.g. broken regex) before packaging.
+# Guard rail: catch truncated/garbled JS bundles before packaging.
 while IFS= read -r js; do
   [ -f "$js" ] || continue
   if ! node --check "$js" 2>/dev/null; then
@@ -136,8 +133,9 @@ while IFS= read -r js; do
   fi
 done < <(find staging_dir/target-*/root-*/www/5700 -name '*.js' -type f 2>/dev/null)
 
-# ImmortalWrt 23.05 使用 opkg，产出 .ipk 格式
-find bin -type f \( -name 'luci-app-mt5700m_*.ipk' -o -name 'luci-i18n-mt5700m-zh-cn_*.ipk' -o -name 'ubus-at-daemon_*.ipk' -o -name 'sms-tool_q_*.ipk' \) -exec cp -f {} "${output_dir}/" \;
-test "$(find "${output_dir}" -type f -name '*.ipk' | wc -l)" -ge 4
+# ImmortalWrt 24.10-SNAPSHOT 使用 opkg，产出 .ipk 格式
+# 同时兼容 .apk（某些 snapshot 可能已切换到 apk）
+find bin -type f \( -name 'luci-app-mt5700m_*.ipk' -o -name 'luci-app-mt5700m-*.apk' -o -name 'luci-i18n-mt5700m-zh-cn_*.ipk' -o -name 'luci-i18n-mt5700m-zh-cn-*.apk' -o -name 'ubus-at-daemon_*.ipk' -o -name 'ubus-at-daemon-*.apk' -o -name 'sms-tool_q_*.ipk' -o -name 'sms-tool_q-*.apk' \) -exec cp -f {} "${output_dir}/" \;
+test "$(find "${output_dir}" -type f \( -name '*.ipk' -o -name '*.apk' \) | wc -l)" -ge 4
 cp -f public-key.pem "${output_dir}/openwrt-sdk-build.pem" 2>/dev/null || true
-(cd "${output_dir}" && find . -maxdepth 1 -type f \( -name '*.ipk' -o -name 'openwrt-sdk-build.pem' \) -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+(cd "${output_dir}" && find . -maxdepth 1 -type f \( -name '*.ipk' -o -name '*.apk' -o -name 'openwrt-sdk-build.pem' \) -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
