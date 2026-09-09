@@ -11,12 +11,17 @@ mkdir -p "${work_dir}" "${output_dir}"
 find "${output_dir}" -mindepth 1 -maxdepth 1 -delete
 cd "${work_dir}"
 curl -fsSLO "${base_url}/sha256sums"
-archive="$(awk '/openwrt-sdk-.*Linux-x86_64\.tar\.zst$/ { print $2; exit }' sha256sums | sed 's/^\*//')"
+archive="$(awk '/openwrt-sdk-.*Linux-x86_64\.tar\.(zst|xz)$/ { print $2; exit }' sha256sums | sed 's/^\*//')"
 test -n "${archive}"
 curl -fL --retry 5 "${base_url}/${archive}" -o "${archive}"
 grep "[ *]${archive}$" sha256sums | sha256sum -c -
-tar --zstd -xf "${archive}"
-sdk_dir="$(find "${work_dir}" -maxdepth 1 -type d -name 'openwrt-sdk-*' | head -n 1)"
+# 解压按扩展名判断
+if [[ "${archive}" == *.zst ]]; then
+    tar --zstd -xf "${archive}"
+elif [[ "${archive}" == *.xz ]]; then
+    tar -Jxf "${archive}"
+fi
+sdk_dir="$(find "${work_dir}" -maxdepth 1 -type d -name '*-sdk-*' | head -n 1)"
 test -n "${sdk_dir}"
 
 cd "${sdk_dir}"
@@ -95,7 +100,7 @@ make package/h5000m-custom/luci-app-mt5700m/clean >/dev/null 2>&1 || true
 rm -rf build_dir/target-*/luci-app-mt5700m \
        staging_dir/target-*/root-*/www/luci-static/resources/view/mt5700m \
        staging_dir/target-*/root-*/www/5700 \
-       bin/packages/*/custom/luci-app-mt5700m*.apk 2>/dev/null || true
+       bin/packages/*/custom/luci-app-mt5700m*.apk bin/packages/*/custom/luci-app-mt5700m_*.ipk 2>/dev/null || true
 # CRLF prevention: .gitattributes mandates eol=lf for www/5700 text files.
 # A pre-compile `sed -i 's/\r$//'` was empirically proven to corrupt large
 # single-line JS bundles on CI runners, so it stays removed.  The post-compile
