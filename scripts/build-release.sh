@@ -11,17 +11,14 @@ mkdir -p "${work_dir}" "${output_dir}"
 find "${output_dir}" -mindepth 1 -maxdepth 1 -delete
 cd "${work_dir}"
 curl -fsSLO "${base_url}/sha256sums"
-archive="$(awk '/openwrt-sdk-.*Linux-x86_64\.tar\.(zst|xz)$/ { print $2; exit }' sha256sums | sed 's/^\*//')"
+# ImmortalWrt 23.05 使用 .tar.xz 格式的 SDK
+archive="$(awk '/immortalwrt-sdk-.*Linux-x86_64\.tar\.xz$/ { print $2; exit }' sha256sums | sed 's/^\*//')"
 test -n "${archive}"
 curl -fL --retry 5 "${base_url}/${archive}" -o "${archive}"
 grep "[ *]${archive}$" sha256sums | sha256sum -c -
-# 解压按扩展名判断
-if [[ "${archive}" == *.zst ]]; then
-    tar --zstd -xf "${archive}"
-elif [[ "${archive}" == *.xz ]]; then
-    tar -Jxf "${archive}"
-fi
-sdk_dir="$(find "${work_dir}" -maxdepth 1 -type d -name '*-sdk-*' | head -n 1)"
+tar -Jxf "${archive}"
+# ImmortalWrt 的 SDK 解压后目录名以 immortalwrt-sdk- 开头
+sdk_dir="$(find "${work_dir}" -maxdepth 1 -type d -name 'immortalwrt-sdk-*' | head -n 1)"
 test -n "${sdk_dir}"
 
 cd "${sdk_dir}"
@@ -66,7 +63,7 @@ fi
 echo "INFO: built Rust at-webserver backend (${rust_target})"
 
 # Fold the standalone WebUI (mt5700webui 4.0: React/Semi frontend + Rust
-# AT backend) into the package source, so one apk ships frontend + backend +
+# AT backend) into the package source, so one ipk ships frontend + backend +
 # LuCI manager.  The LuCI app itself no longer carries the old umi WebUI
 # (htdocs/5700, at-server.py were removed from the repo).
 pkg_src="package/h5000m-custom/luci-app-mt5700m"
@@ -115,19 +112,13 @@ make package/h5000m-custom/luci-app-mt5700m/compile -j"$(nproc)" V=s
 #
 # This is the step that fixes SDK truncation of huge minified JS bundles
 # (34000+ char lines; the SDK copy/tar mangles CRLF/long-line files).
-# Empirical history with the old umi bundle:
-#   - v2.3.22: step PRESENT  -> build SUCCEEDED
-#   - v2.3.26: step REMOVED  -> build FAILED (node --check caught truncation)
-#   - v2.3.27: absent again  -> build FAILED
-# The .apk is assembled FROM staging_dir, so overwriting staging_dir here
-# DOES reach the package.  The new React bundle has the same exposure.
+# The .ipk is assembled FROM staging_dir, so overwriting staging_dir here
+# DOES reach the package.
 cp -a "${repo_dir}/mt5700webui-openwrt-server/at-webserver/files/www/5700/." staging_dir/target-*/root-*/www/5700/.
 echo "INFO: re-copied pristine www/5700 (mt5700webui 4.0) into staging_dir after compile"
 
 # Sanity check: the freshly staged www tree must contain the WebUI integration.
 # If this fails, the SDK reused a cached htdocs copy and the package would be broken.
-# We check for the homepage entry-button class (a JS string literal that survives
-# any minification, unlike a // comment) and for the bundled WebUI SPA entry.
 if ! grep -rq "mt5700m-webui-cta" staging_dir/target-*/root-*/www/luci-static/resources/view/mt5700m/ 2>/dev/null; then
   echo "ERROR: built www tree is missing the WebUI entry button (SDK caching?)" >&2
   exit 1
@@ -137,11 +128,6 @@ if ! ls staging_dir/target-*/root-*/www/5700/index.html >/dev/null 2>&1; then
   exit 1
 fi
 # Guard rail: catch truncated/garbled JS bundles (e.g. broken regex) before packaging.
-# IMPORTANT: validate EVERY .js under /www/5700/, not just the main umi bundle.
-# A truncated per-route async chunk (e.g. p__CPE__Network__Info__index.*.async.js)
-# parses with a SyntaxError and white-screens ONLY that route while the rest of the
-# app loads fine — exactly the symptom reported for /network/info. The earlier guard
-# only checked umi.ec9b4b52.js and let broken route chunks through.
 while IFS= read -r js; do
   [ -f "$js" ] || continue
   if ! node --check "$js" 2>/dev/null; then
@@ -150,7 +136,8 @@ while IFS= read -r js; do
   fi
 done < <(find staging_dir/target-*/root-*/www/5700 -name '*.js' -type f 2>/dev/null)
 
-find bin -type f \( -name 'luci-app-mt5700m-*.apk' -o -name 'luci-app-mt5700m_*.ipk' -o -name 'luci-i18n-mt5700m-zh-cn-*.apk' -o -name 'luci-i18n-mt5700m-zh-cn_*.ipk' -o -name 'ubus-at-daemon-*.apk' -o -name 'ubus-at-daemon_*.ipk' -o -name 'sms-tool_q-*.apk' -o -name 'sms-tool_q_*.ipk' \) -exec cp -f {} "${output_dir}/" \;
-test "$(find "${output_dir}" -type f \( -name '*.apk' -o -name '*.ipk' \) | wc -l)" -ge 4
+# ImmortalWrt 23.05 使用 opkg，产出 .ipk 格式
+find bin -type f \( -name 'luci-app-mt5700m_*.ipk' -o -name 'luci-i18n-mt5700m-zh-cn_*.ipk' -o -name 'ubus-at-daemon_*.ipk' -o -name 'sms-tool_q_*.ipk' \) -exec cp -f {} "${output_dir}/" \;
+test "$(find "${output_dir}" -type f -name '*.ipk' | wc -l)" -ge 4
 cp -f public-key.pem "${output_dir}/openwrt-sdk-build.pem" 2>/dev/null || true
-(cd "${output_dir}" && find . -maxdepth 1 -type f \( -name '*.apk' -o -name '*.ipk' -o -name 'openwrt-sdk-build.pem' \) -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+(cd "${output_dir}" && find . -maxdepth 1 -type f \( -name '*.ipk' -o -name 'openwrt-sdk-build.pem' \) -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
