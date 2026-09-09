@@ -4,7 +4,7 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="${RUNNER_TEMP:-/tmp}/mt5700m-sdk"
 output_dir="${repo_dir}/dist-release"
-base_url="https://downloads.openwrt.org/snapshots/targets/mediatek/filogic"
+base_url="https://downloads.immortalwrt.org/releases/23.05.4/targets/mediatek/filogic"
 qmodem_commit="6f84b7935921cce6a215171af5e93cad62f8a5a5"
 
 mkdir -p "${work_dir}" "${output_dir}"
